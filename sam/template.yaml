@@ -1,0 +1,200 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  eventbridge-schedule-to-stepfunction
+
+
+Resources:
+  ##########################################################################
+  #  Dynamo DB tables                                                      #
+  ##########################################################################
+
+  # Create table with KMS key. Avoid any charges, I haven't included here
+  LegacyAppTable:
+    Type: "AWS::DynamoDB::Table"
+    DeletionPolicy: Delete
+    Properties:
+      KeySchema:
+        - AttributeName: PK
+          KeyType: HASH
+        - AttributeName: SK
+          KeyType: RANGE
+      AttributeDefinitions:
+        - AttributeName: PK
+          AttributeType: S
+        - AttributeName: SK
+          AttributeType: S
+      BillingMode: PAY_PER_REQUEST
+      TableName: LegacyApp
+
+  ##########################################################################
+  #  Create SNS, SQS and Subscription                                      #
+  ##########################################################################
+
+  # Define the SQS queue
+  LegacyAppSQS:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: legacy-app-queue
+
+  # Define the SNS topic
+  LegacyAppSNS:
+    Type: AWS::SNS::Topic
+    Properties:
+      DisplayName: "LegacyApp SNS Topic"
+      FifoTopic: false
+      TopicName: legacy-app-topic
+      Subscription:
+        - Protocol: sqs
+          Endpoint: !GetAtt LegacyAppSQS.Arn
+
+  # Policy allows SNS to publish to this SQS queue
+  SnsToSqsPolicy:
+    Type: AWS::SQS::QueuePolicy
+    Properties:
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: "Allow SNS publish to SQS"
+            Effect: Allow
+            Principal:
+              Service: "sns.amazonaws.com"
+            Resource: !GetAtt LegacyAppSQS.Arn
+            Action: SQS:SendMessage
+            Condition:
+              ArnEquals:
+                aws:SourceArn: !Ref LegacyAppSNS
+      Queues:
+        - Ref: LegacyAppSQS
+  ##########################################################################
+  #  IAM Roles and Permission                                              #
+  ##########################################################################
+
+  StateExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - !Sub states.${AWS::Region}.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      Policies:
+        - PolicyName: WriteCloudWatchLogs
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'logs:CreateLogGroup'
+                  - 'logs:CreateLogStream'
+                  - 'logs:PutLogEvents'
+                  - 'logs:CreateLogDelivery'
+                  - 'logs:GetLogDelivery'
+                  - 'logs:UpdateLogDelivery'
+                  - 'logs:DeleteLogDelivery'
+                  - 'logs:ListLogDeliveries'
+                  - 'logs:PutResourcePolicy'
+                  - 'logs:DescribeResourcePolicies'
+                  - 'logs:DescribeLogGroups'
+                Resource: '*'
+        - PolicyName: DynamoDBAccess
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'dynamodb:GetItem'
+                  - 'dynamodb:PutItem'
+                  - 'dynamodb:UpdateItem'
+                  - 'dynamodb:DeleteItem'
+                Resource: !GetAtt LegacyAppTable.Arn
+        - PolicyName: SNSPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: "Allow"
+                Action:
+                  - 'sns:*'
+                Resource:
+                  - !Ref LegacyAppSNS
+
+  ##########################################################################
+  #  State Machine                                                         #
+  ##########################################################################
+
+  LegacyAppStateMachineLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub  /aws/vendedlogs/states/${AWS::StackName}
+      RetentionInDays: 1
+
+  LegacyAppStateMachine:
+    Type: AWS::Serverless::StateMachine
+    Properties:
+      Name: legacy-app-state-machine
+      DefinitionUri: ../statemachine/legacyApp.json
+      DefinitionSubstitutions:
+        LegacyAppSNSPath: !Ref LegacyAppSNS
+      Role: !GetAtt StateExecutionRole.Arn
+      Logging:
+        Destinations:
+          - CloudWatchLogsLogGroup:
+              LogGroupArn: !GetAtt LegacyAppStateMachineLogGroup.Arn
+        IncludeExecutionData: True
+        Level: ALL
+
+  ##########################################################################
+  #  EventBridge Schedules                                                 #
+  ##########################################################################
+
+  LegacyAppScheduleRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - scheduler.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Policies:
+        - PolicyName: InvokeStateMachine
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'states:startExecution'
+                Resource:
+                  - !GetAtt LegacyAppStateMachine.Arn
+
+  LegacyAppSchedule:
+    Type: AWS::Scheduler::Schedule
+    Properties:
+      Description: Schedule the runs every day 08:00 PM CST
+      FlexibleTimeWindow:
+        Mode: 'OFF'
+      ScheduleExpression: 'cron(0 20 ? * * *)'
+      ScheduleExpressionTimezone: "America/Chicago"
+      Target:
+        Arn: !GetAtt LegacyAppStateMachine.Arn
+        RoleArn: !GetAtt LegacyAppScheduleRole.Arn
+
+  ##########################################################################
+  #  Outputs                                                               #
+  ##########################################################################
+Outputs:
+  StateMachineArn:
+    Export:
+      Name: LegacyAppStateMachineArn
+      Description: LegacyAppStateMachineArn
+    Value:
+      'Fn::GetAtt':
+        - LegacyAppStateMachine
+        - Arn

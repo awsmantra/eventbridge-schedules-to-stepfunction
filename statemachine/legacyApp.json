@@ -1,0 +1,81 @@
+{
+  "Comment": "State Machine to send message to Legacy App",
+  "StartAt": "GetTenantList",
+  "States": {
+    "GetTenantList": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::dynamodb:getItem",
+      "Parameters": {
+        "TableName": "LegacyApp",
+        "Key": {
+          "PK": {
+            "S": "METADATA"
+          },
+          "SK": {
+            "S": "METADATA"
+          }
+        }
+      },
+      "ResultPath": "$.context",
+      "OutputPath": "$.context.Item.TenantList.L",
+      "Next": "IterateTenantList"
+    },
+    "IterateTenantList": {
+      "Type": "Map",
+      "ItemProcessor": {
+        "ProcessorConfig": {
+          "Mode": "INLINE"
+        },
+        "StartAt": "GetTenant",
+        "States": {
+          "GetTenant": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::dynamodb:getItem",
+            "Parameters": {
+              "TableName": "LegacyApp",
+              "Key": {
+                "PK": {
+                  "S.$": "$"
+                },
+                "SK": {
+                  "S.$": "$"
+                }
+              }
+            },
+            "InputPath": "$.S",
+            "Next": "TransformMessage",
+            "ResultSelector": {
+              "message.$": "States.StringToJson($.Item.Message.S)"
+            }
+          },
+          "TransformMessage": {
+            "Type": "Pass",
+            "Parameters": {
+              "version.$": "$.message.version",
+              "source.$": "$.message.source",
+              "eventType.$": "$.message.eventType",
+              "details": {
+                "tenantId.$": "$.message.details.tenantId"
+              },
+              "correlationId.$": "States.UUID()"
+            },
+            "Next": "SendMessageToLegacyApp"
+          },
+          "SendMessageToLegacyApp": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::sns:publish",
+            "Parameters": {
+              "Message.$": "$",
+              "TopicArn": "${LegacyAppSNSPath}"
+            },
+            "End": true
+          }
+        }
+      },
+      "End": true,
+      "ItemsPath": "$",
+      "ResultPath": "$",
+      "InputPath": "$"
+    }
+  }
+}

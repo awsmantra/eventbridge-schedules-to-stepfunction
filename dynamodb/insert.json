@@ -1,0 +1,57 @@
+{
+  "LegacyApp": [
+    {
+      "PutRequest": {
+        "Item": {
+          "PK": {
+            "S": "METADATA"
+          },
+          "SK": {
+            "S": "METADATA"
+          },
+          "TenantList": {
+            "L": [
+              {
+                "S": "TENANT#123456"
+              },
+              {
+                "S": "TENANT#456789"
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "PutRequest": {
+        "Item": {
+          "PK": {
+            "S": "TENANT#123456"
+          },
+          "SK": {
+            "S": "TENANT#123456"
+          },
+          "Message": {
+            "S": "{   \"version\": \"1.0\",   \"source\": \"SampleApp\",   \"eventType\": \"LegacyApp\",  \n\"details\": {     \"tenantId\": 697190   },   \"correlationId\": \"123ABC\" }"
+          }
+        }
+      }
+    },
+    {
+      "PutRequest": {
+        "Item": {
+          "PK": {
+            "S": "TENANT#456789"
+          },
+          "SK": {
+            "S": "TENANT#456789"
+          },
+          "Message": {
+            "S": "{   \"version\": \"1.0\",   \"source\": \"SampleApp\",   \"eventType\": \"LegacyApp\",  \n\"details\": {     \"tenantId\": 697191   },   \"correlationId\": \"123ABC\" }"
+          }
+        }
+      }
+    }
+
+  ]
+}
